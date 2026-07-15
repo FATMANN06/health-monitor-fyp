@@ -1,4 +1,0 @@
-#define WIFI_SSID     "your_wifi_name"
-#define WIFI_PASSWORD "your_wifi_password"
-#define API_KEY       "your_firebase_api_key"
-#define DATABASE_URL  "your_firebase_database_url"
