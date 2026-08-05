@@ -474,7 +474,18 @@ function connectFirebase() {
   if (!apiKey || !dbUrl) { alert('Please fill in both fields.'); return; }
 
   try {
-    const app = firebase.initializeApp({ apiKey, databaseURL: dbUrl });
+    // Simpan kunci supaya tak perlu re-type bila refresh
+    localStorage.setItem('fb_apikey', apiKey);
+    localStorage.setItem('fb_dburl', dbUrl);
+
+    // DIBETULKAN: Semak jika wujud app sedia ada untuk elak duplicate-app error
+    let app;
+    if (!firebase.apps.length) {
+      app = firebase.initializeApp({ apiKey, databaseURL: dbUrl });
+    } else {
+      app = firebase.app();
+    }
+
     db = firebase.database(app);
     document.getElementById('config-banner').style.display = 'none';
     setStatus('online', 'ESP32 connected');
@@ -483,6 +494,17 @@ function connectFirebase() {
     alert('Firebase error: ' + e.message);
   }
 }
+
+// Auto-connect jika kunci ada dalam LocalStorage
+window.addEventListener('DOMContentLoaded', () => {
+  const savedKey = localStorage.getItem('fb_apikey');
+  const savedUrl = localStorage.getItem('fb_dburl');
+  if (savedKey && savedUrl) {
+    document.getElementById('cfg-apikey').value = savedKey;
+    document.getElementById('cfg-dburl').value = savedUrl;
+    connectFirebase();
+  }
+});
 
 function setStatus(state, text) {
   const pill = document.getElementById('status-pill');
@@ -542,10 +564,10 @@ function startListeners() {
   db.ref(root + '/daily_summary/' + today).on('value', snap => {
     const d = snap.val();
     if (!d) return;
-    document.getElementById('sum-avgbpm').textContent  = d.avg_bpm   || '--';
-    document.getElementById('sum-steps').textContent   = d.total_steps || '--';
-    document.getElementById('sum-cals').textContent    = d.calories_est || '--';
-    document.getElementById('sum-active').textContent  = d.active_minutes != null ? d.active_minutes + ' min' : '--';
+    document.getElementById('sum-avgbpm').textContent   = d.avg_bpm   || '--';
+    document.getElementById('sum-steps').textContent    = d.total_steps || '--';
+    document.getElementById('sum-cals').textContent     = d.calories_est || '--';
+    document.getElementById('sum-active').textContent   = d.active_minutes != null ? d.active_minutes + ' min' : '--';
   });
 
   /* Device status */
