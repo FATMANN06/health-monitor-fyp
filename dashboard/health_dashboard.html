@@ -282,9 +282,16 @@
         <p>ESP32 · IoT Dashboard · FYP Project</p>
       </div>
     </div>
-    <div class="status-pill" id="status-pill">
-      <div class="dot" id="status-dot"></div>
-      <span id="status-text">Not connected</span>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div style="text-align:right;">
+        <div style="font-size:11px;color:var(--muted);">🇲🇾 Malaysia Time (MYT)</div>
+        <div id="myt-clock" style="font-size:14px;font-weight:600;color:var(--text);font-family:monospace;">--:--:--</div>
+        <div id="myt-date" style="font-size:11px;color:var(--muted);">--- -- ----</div>
+      </div>
+      <div class="status-pill" id="status-pill">
+        <div class="dot" id="status-dot"></div>
+        <span id="status-text">Not connected</span>
+      </div>
     </div>
   </header>
 
@@ -389,7 +396,7 @@
     <table>
       <thead>
         <tr>
-          <th>Time</th>
+          <th>Time (MYT)</th>
           <th>Heart Rate</th>
           <th>Temperature</th>
           <th>Steps</th>
@@ -422,6 +429,17 @@
     </div>
   </div>
 
+  <!-- ALERT HISTORY -->
+  <div class="log-card" style="margin-bottom:20px;">
+    <h3 style="display:flex;align-items:center;gap:10px;">
+      🔔 Alert History
+      <span id="alert-count" style="display:none;background:#f85149;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;"></span>
+    </h3>
+    <div id="alert-history-list" style="margin-top:10px;">
+      <div style="color:var(--muted);font-size:13px;text-align:center;padding:16px;">No alerts yet — system is monitoring...</div>
+    </div>
+  </div>
+
   <footer>
     IoT Health & Fitness Monitoring System &mdash; ESP32 + Firebase &mdash; FYP Project
   </footer>
@@ -429,82 +447,111 @@
 
 <script>
 /* ── CHART SETUP ──────────────────────────── */
-const chartCfg = (color, label, unit) => ({
+const bpmChart = new Chart(document.getElementById('chart-bpm'), {
   type: 'line',
-  data: { labels: [], datasets: [{ label, data: [],
-    borderColor: color, backgroundColor: color+'22',
-    borderWidth: 2, pointRadius: 3, pointBackgroundColor: color,
-    tension: 0.4, fill: true
-  }]},
+  data: { labels: [], datasets: [
+    { label:'Heart Rate', data:[], borderColor:'#f85149', backgroundColor:'#f8514922', borderWidth:2, pointRadius:4, pointBackgroundColor:'#f85149', tension:0.4, fill:true },
+    { label:'Max limit', data:[], borderColor:'#e3b341', borderWidth:1.5, borderDash:[6,4], pointRadius:0, fill:false },
+    { label:'Min limit', data:[], borderColor:'#58a6ff', borderWidth:1.5, borderDash:[6,4], pointRadius:0, fill:false }
+  ]},
   options: {
-    responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
-    scales: {
-      x: { display: false },
-      y: { grid: { color: '#30363d' }, ticks: { color: '#7d8590', font: { size: 11 } } }
+    responsive:true, maintainAspectRatio:false,
+    plugins: {
+      legend: { display:true, labels:{ color:'#7d8590', font:{size:10}, boxWidth:16 } },
+      tooltip: { callbacks:{ label: ctx => ctx.dataset.label+': '+ctx.parsed.y+' bpm' } }
     },
-    animation: { duration: 300 }
+    scales: {
+      x: { display:false },
+      y: { grid:{color:'#30363d'}, ticks:{ color:'#7d8590', font:{size:11}, callback: v => v+' bpm' }, min:30, max:160,
+           title:{ display:true, text:'BPM', color:'#7d8590', font:{size:11} } }
+    },
+    animation:{ duration:300 }
   }
 });
 
-const bpmChart  = new Chart(document.getElementById('chart-bpm'),  chartCfg('#f85149','BPM','bpm'));
-const tempChart = new Chart(document.getElementById('chart-temp'), chartCfg('#e3b341','Temp','°C'));
+const tempChart = new Chart(document.getElementById('chart-temp'), {
+  type: 'line',
+  data: { labels: [], datasets: [
+    { label:'Temperature', data:[], borderColor:'#e3b341', backgroundColor:'#e3b34122', borderWidth:2, pointRadius:4, pointBackgroundColor:'#e3b341', tension:0.4, fill:true },
+    { label:'Fever (38°C)', data:[], borderColor:'#f85149', borderWidth:1.5, borderDash:[6,4], pointRadius:0, fill:false },
+    { label:'Min (35.5°C)', data:[], borderColor:'#58a6ff', borderWidth:1.5, borderDash:[6,4], pointRadius:0, fill:false }
+  ]},
+  options: {
+    responsive:true, maintainAspectRatio:false,
+    plugins: {
+      legend: { display:true, labels:{ color:'#7d8590', font:{size:10}, boxWidth:16 } },
+      tooltip: { callbacks:{ label: ctx => ctx.dataset.label+': '+ctx.parsed.y+' °C' } }
+    },
+    scales: {
+      x: { display:false },
+      y: { grid:{color:'#30363d'}, ticks:{ color:'#7d8590', font:{size:11}, callback: v => v+' °C' }, min:34, max:42,
+           title:{ display:true, text:'°C', color:'#7d8590', font:{size:11} } }
+    },
+    animation:{ duration:300 }
+  }
+});
 const MAX_POINTS = 20;
 
-function pushChart(chart, val) {
+function pushChart(chart, val, min, max) {
   chart.data.labels.push('');
   chart.data.datasets[0].data.push(val);
+  chart.data.datasets[1].data.push(max); // upper threshold line
+  chart.data.datasets[2].data.push(min); // lower threshold line
   if (chart.data.labels.length > MAX_POINTS) {
     chart.data.labels.shift();
     chart.data.datasets[0].data.shift();
+    chart.data.datasets[1].data.shift();
+    chart.data.datasets[2].data.shift();
   }
   chart.update('none');
 }
 
 /* ── STATE ────────────────────────────────── */
 let db = null;
+let hasLatest = false;
 const log = [];
 const thresholds = { bpmMin:50, bpmMax:120, tempMin:35.5, tempMax:38.0, stepsGoal:8000 };
 const bpmHistory = [], tempHistory = [];
 
+/* ── FIREBASE CONFIG ─────────────────────────
+   Paste your credentials here ONCE (copy them from your old
+   dashboard file) and the page will connect automatically.
+   Leave empty to use the setup box instead.            */
+const FIREBASE_CONFIG = {
+  apiKey:      '',   // e.g. 'AIzaSyXXXXXXXXXXX'
+  databaseURL: ''    // e.g. 'https://your-project-default-rtdb.asia-southeast1.firebasedatabase.app'
+};
+
 /* ── CONNECT ──────────────────────────────── */
-function connectFirebase() {
-  const apiKey = document.getElementById('cfg-apikey').value.trim();
-  const dbUrl  = document.getElementById('cfg-dburl').value.trim();
-  if (!apiKey || !dbUrl) { alert('Please fill in both fields.'); return; }
+function connectFirebase(auto) {
+  let apiKey = FIREBASE_CONFIG.apiKey, dbUrl = FIREBASE_CONFIG.databaseURL;
+  if (!apiKey || !dbUrl) {
+    try {
+      const saved = JSON.parse(localStorage.getItem('fb_cfg') || 'null');
+      if (saved) { apiKey = saved.apiKey; dbUrl = saved.dbUrl; }
+    } catch(e) {}
+  }
+  if (auto !== 'auto') {
+    apiKey = document.getElementById('cfg-apikey').value.trim() || apiKey;
+    dbUrl  = document.getElementById('cfg-dburl').value.trim()  || dbUrl;
+  }
+  if (!apiKey || !dbUrl) { if (auto !== 'auto') alert('Please fill in both fields.'); return; }
 
   try {
-    // Simpan kunci supaya tak perlu re-type bila refresh
-    localStorage.setItem('fb_apikey', apiKey);
-    localStorage.setItem('fb_dburl', dbUrl);
-
-    // DIBETULKAN: Semak jika wujud app sedia ada untuk elak duplicate-app error
-    let app;
-    if (!firebase.apps.length) {
-      app = firebase.initializeApp({ apiKey, databaseURL: dbUrl });
-    } else {
-      app = firebase.app();
-    }
-
+    try { localStorage.setItem('fb_cfg', JSON.stringify({ apiKey, dbUrl })); } catch(e) {}
+    const app = firebase.initializeApp({ apiKey, databaseURL: dbUrl });
     db = firebase.database(app);
     document.getElementById('config-banner').style.display = 'none';
     setStatus('online', 'ESP32 connected');
+    // Request browser notification permission
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
     startListeners();
   } catch(e) {
     alert('Firebase error: ' + e.message);
   }
 }
-
-// Auto-connect jika kunci ada dalam LocalStorage
-window.addEventListener('DOMContentLoaded', () => {
-  const savedKey = localStorage.getItem('fb_apikey');
-  const savedUrl = localStorage.getItem('fb_dburl');
-  if (savedKey && savedUrl) {
-    document.getElementById('cfg-apikey').value = savedKey;
-    document.getElementById('cfg-dburl').value = savedUrl;
-    connectFirebase();
-  }
-});
 
 function setStatus(state, text) {
   const pill = document.getElementById('status-pill');
@@ -522,52 +569,61 @@ function startListeners() {
   /* Heart rate */
   db.ref(root + '/sensor_data/heart_rate').limitToLast(1).on('child_added', snap => {
     const d = snap.val();
-    if (!d) return;
+    if (!d || hasLatest) return;
     document.getElementById('bpm-val').innerHTML = d.bpm + '<span class="card-unit">bpm</span>';
-    document.getElementById('bpm-time').textContent = 'Last update: ' + fmtTime(d.timestamp);
+    document.getElementById('bpm-time').textContent = 'Last update: ' + fmtTime(realTime(d.unix_time || d.timestamp));
     const st = bpmStatus(d.bpm);
     document.getElementById('bpm-status').className = 'card-status ' + st.cls;
     document.getElementById('bpm-status').textContent = st.label;
-    pushChart(bpmChart, d.bpm);
+    pushChart(bpmChart, d.bpm, thresholds.bpmMin, thresholds.bpmMax);
     checkAlert('heart_rate', d.bpm, d.timestamp);
-    addLog(d.timestamp, d.bpm, null, null, st.label);
+    latestReading.bpm = d.bpm;
+    latestReading.bpmStatus = st.label;
+    latestReading.time = realTime(d.unix_time || d.timestamp);
+    updateLogTable();
   });
 
   /* Temperature */
   db.ref(root + '/sensor_data/temperature').limitToLast(1).on('child_added', snap => {
     const d = snap.val();
-    if (!d) return;
-    document.getElementById('temp-val').innerHTML = d.celsius + '<span class="card-unit">°C</span>';
-    document.getElementById('temp-time').textContent = 'Last update: ' + fmtTime(d.timestamp);
+    if (!d || hasLatest) return;
+    document.getElementById('temp-val').innerHTML = Number(d.celsius).toFixed(1) + '<span class="card-unit">°C</span>';
+    document.getElementById('temp-time').textContent = 'Last update: ' + fmtTime(realTime(d.unix_time || d.timestamp));
     const st = tempStatus(d.celsius);
     document.getElementById('temp-status').className = 'card-status ' + st.cls;
     document.getElementById('temp-status').textContent = st.label;
-    pushChart(tempChart, d.celsius);
+    pushChart(tempChart, d.celsius, thresholds.tempMin, thresholds.tempMax);
     checkAlert('temperature', d.celsius, d.timestamp);
-    addLog(d.timestamp, null, d.celsius, null, st.label);
+    latestReading.temp = d.celsius;
+    latestReading.tempStatus = st.label;
+    latestReading.time = realTime(d.unix_time || d.timestamp);
+    updateLogTable();
   });
 
   /* Motion / steps */
   db.ref(root + '/sensor_data/motion').limitToLast(1).on('child_added', snap => {
     const d = snap.val();
-    if (!d) return;
+    if (!d || hasLatest) return;
     document.getElementById('steps-val').innerHTML = d.steps + '<span class="card-unit">steps</span>';
-    document.getElementById('steps-time').textContent = 'Last update: ' + fmtTime(d.timestamp);
+    document.getElementById('steps-time').textContent = 'Last update: ' + fmtTime(realTime(d.unix_time || d.timestamp));
     const pct = Math.min(100, Math.round(d.steps / thresholds.stepsGoal * 100));
     document.getElementById('steps-status').className = 'card-status ' + (pct >= 100 ? 'status-normal' : 'status-warning');
     document.getElementById('steps-status').textContent = pct >= 100 ? '🎉 Goal reached!' : pct + '% of daily goal';
-    addLog(d.timestamp, null, null, d.steps, d.activity || '—');
+    latestReading.steps = d.steps;
+    latestReading.activity = d.activity || '—';
+    latestReading.time = realTime(d.unix_time || d.timestamp);
+    updateLogTable();
   });
 
   /* Daily summary */
-  const today = new Date().toISOString().slice(0,10);
+  const today = new Date().toLocaleDateString('en-CA', {timeZone: 'Asia/Kuala_Lumpur'});
   db.ref(root + '/daily_summary/' + today).on('value', snap => {
     const d = snap.val();
     if (!d) return;
-    document.getElementById('sum-avgbpm').textContent   = d.avg_bpm   || '--';
-    document.getElementById('sum-steps').textContent    = d.total_steps || '--';
-    document.getElementById('sum-cals').textContent     = d.calories_est || '--';
-    document.getElementById('sum-active').textContent   = d.active_minutes != null ? d.active_minutes + ' min' : '--';
+    document.getElementById('sum-avgbpm').textContent  = d.avg_bpm   || '--';
+    document.getElementById('sum-steps').textContent   = d.total_steps || '--';
+    document.getElementById('sum-cals').textContent    = d.calories_est || '--';
+    document.getElementById('sum-active').textContent  = d.active_minutes != null ? d.active_minutes + ' min' : '--';
   });
 
   /* Device status */
@@ -579,6 +635,50 @@ function startListeners() {
     document.getElementById('dev-ip').textContent       = d.ip_address || '—';
     document.getElementById('dev-lastseen').textContent = d.last_seen ? fmtTime(d.last_seen) : '—';
     setStatus(d.online ? 'online' : 'offline', d.online ? 'ESP32 online' : 'ESP32 offline');
+  });
+
+  /* Latest combined snapshot — updates all 3 sensors at once */
+  db.ref(root + '/sensor_data/latest').on('value', snap => {
+    const d = snap.val();
+    if (!d) return;
+    hasLatest = true;
+    const ts = realTime(d.timestamp_myt || d.unix_time);
+
+    // Update BPM card
+    if (d.bpm && d.bpm > 0) {
+      document.getElementById('bpm-val').innerHTML = d.bpm + '<span class="card-unit">bpm</span>';
+      document.getElementById('bpm-time').textContent = 'Last update: ' + fmtTime(ts);
+      const st = bpmStatus(d.bpm);
+      document.getElementById('bpm-status').className = 'card-status ' + st.cls;
+      document.getElementById('bpm-status').textContent = st.label;
+      pushChart(bpmChart, d.bpm, thresholds.bpmMin, thresholds.bpmMax);
+    }
+
+    // Update Temp card
+    if (d.celsius && d.celsius > 0) {
+      document.getElementById('temp-val').innerHTML = d.celsius.toFixed(1) + '<span class="card-unit">°C</span>';
+      document.getElementById('temp-time').textContent = 'Last update: ' + fmtTime(ts);
+      const st = tempStatus(d.celsius);
+      document.getElementById('temp-status').className = 'card-status ' + st.cls;
+      document.getElementById('temp-status').textContent = st.label;
+      pushChart(tempChart, d.celsius, thresholds.tempMin, thresholds.tempMax);
+    }
+
+    // Update Steps card
+    if (d.steps != null) {
+      const pct = Math.min(100, Math.round(d.steps / thresholds.stepsGoal * 100));
+      document.getElementById('steps-val').innerHTML = d.steps + '<span class="card-unit">steps</span>';
+      document.getElementById('steps-time').textContent = 'Last update: ' + fmtTime(ts);
+      document.getElementById('steps-status').className = 'card-status ' + (pct >= 100 ? 'status-normal' : 'status-warning');
+      document.getElementById('steps-status').textContent = pct >= 100 ? '🎉 Goal reached!' : pct + '% of daily goal';
+    }
+
+    // Add ONE combined row to log table
+    addCombinedRow(ts, d.bpm, d.celsius, d.steps, d.activity, d.bpm_status, d.temp_status);
+
+    // Check alerts
+    if (d.bpm > 0) checkAlert('heart_rate', d.bpm, ts);
+    if (d.celsius > 0) checkAlert('temperature', d.celsius, ts);
   });
 
   /* Read thresholds from Firebase if they exist */
@@ -611,40 +711,216 @@ function saveThreshold(type) {
   alert('✅ Thresholds saved to Firebase!');
 }
 
-/* ── ALERT ────────────────────────────────── */
+/* ── ALERT SOUND ──────────────────────────── */
+function playAlertSound(severity) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const beeps = severity === 'critical' ? 3 : 1;
+    for (let i = 0; i < beeps; i++) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = severity === 'critical' ? 880 : 660;
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(0.4, ctx.currentTime + i * 0.4);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.4 + 0.3);
+      osc.start(ctx.currentTime + i * 0.4);
+      osc.stop(ctx.currentTime + i * 0.4 + 0.3);
+    }
+  } catch(e) {}
+}
+
+/* ── BROWSER NOTIFICATION ─────────────────── */
+function sendBrowserNotification(title, msg) {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'granted') {
+    new Notification(title, { body: msg, icon: '❤' });
+  } else if (Notification.permission !== 'denied') {
+    Notification.requestPermission().then(p => {
+      if (p === 'granted') new Notification(title, { body: msg });
+    });
+  }
+}
+
+/* ── POPUP NOTIFICATION ───────────────────── */
+function showPopup(msg, severity) {
+  // Remove existing popup
+  const existing = document.getElementById('alert-popup');
+  if (existing) existing.remove();
+
+  const color  = severity === 'critical' ? '#f85149' : '#e3b341';
+  const bg     = severity === 'critical' ? '#2a0a0a' : '#2a1f00';
+  const icon   = severity === 'critical' ? '🚨' : '⚠️';
+
+  const popup = document.createElement('div');
+  popup.id = 'alert-popup';
+  popup.style.cssText = `
+    position:fixed; top:20px; right:20px; z-index:9999;
+    background:${bg}; border:2px solid ${color};
+    border-radius:14px; padding:18px 22px; min-width:300px; max-width:380px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    animation: slideInRight 0.4s ease;
+    font-family: system-ui, sans-serif;
+  `;
+  popup.innerHTML = `
+    <style>
+      @keyframes slideInRight {
+        from { opacity:0; transform:translateX(60px); }
+        to   { opacity:1; transform:translateX(0); }
+      }
+      @keyframes slideOutRight {
+        from { opacity:1; transform:translateX(0); }
+        to   { opacity:0; transform:translateX(60px); }
+      }
+    </style>
+    <div style="display:flex;align-items:flex-start;gap:12px;">
+      <span style="font-size:28px;flex-shrink:0;">${icon}</span>
+      <div style="flex:1;">
+        <div style="font-size:14px;font-weight:700;color:${color};margin-bottom:4px;">
+          ${severity === 'critical' ? 'CRITICAL ALERT' : 'WARNING'}
+        </div>
+        <div style="font-size:13px;color:#e6edf3;line-height:1.5;">${msg}</div>
+        <div style="font-size:11px;color:#7d8590;margin-top:6px;">${getMYTNow()}</div>
+      </div>
+      <button onclick="this.closest('#alert-popup').remove()"
+        style="background:none;border:none;color:#7d8590;font-size:18px;cursor:pointer;padding:0;flex-shrink:0;">✕</button>
+    </div>
+    <div style="margin-top:12px;height:3px;background:#30363d;border-radius:2px;overflow:hidden;">
+      <div id="popup-timer" style="height:100%;background:${color};width:100%;transition:width 8s linear;border-radius:2px;"></div>
+    </div>
+  `;
+  document.body.appendChild(popup);
+
+  // Animate timer bar
+  setTimeout(() => {
+    const bar = document.getElementById('popup-timer');
+    if (bar) bar.style.width = '0%';
+  }, 50);
+
+  // Auto remove after 8 seconds
+  setTimeout(() => {
+    if (popup.parentNode) {
+      popup.style.animation = 'slideOutRight 0.3s ease';
+      setTimeout(() => popup.remove(), 300);
+    }
+  }, 8000);
+}
+
+/* ── ALERT HISTORY PANEL ──────────────────── */
+function addAlertHistory(msg, severity, ts) {
+  const list = document.getElementById('alert-history-list');
+  if (!list) return;
+  const item = document.createElement('div');
+  const color = severity === 'critical' ? '#f85149' : '#e3b341';
+  item.style.cssText = `padding:8px 12px;border-left:3px solid ${color};background:var(--card);border-radius:0 6px 6px 0;margin-bottom:6px;font-size:12px;`;
+  item.innerHTML = `<span style="color:${color};font-weight:500;">${severity === 'critical' ? '🚨' : '⚠️'} ${msg}</span><br><span style="color:var(--muted);">${fmtTime(ts)}</span>`;
+  list.insertBefore(item, list.firstChild);
+  if (list.children.length > 10) list.removeChild(list.lastChild);
+  // Update badge
+  const badge = document.getElementById('alert-count');
+  if (badge) {
+    badge.textContent = list.children.length;
+    badge.style.display = 'inline-flex';
+  }
+}
+
+/* ── MAIN ALERT FUNCTION ──────────────────── */
 function checkAlert(sensor, val, ts) {
-  let msg = null;
+  let msg      = null;
+  let severity = 'warning';
+
   if (sensor === 'heart_rate') {
-    if (val > thresholds.bpmMax) msg = `⚠ High heart rate: ${val} BPM (limit ${thresholds.bpmMax})`;
-    if (val < thresholds.bpmMin) msg = `⚠ Low heart rate: ${val} BPM (limit ${thresholds.bpmMin})`;
+    if (val > thresholds.bpmMax) {
+      msg = `High heart rate detected: ${val} BPM (normal max: ${thresholds.bpmMax} BPM)`;
+      severity = val > 140 ? 'critical' : 'warning';
+    }
+    if (val < thresholds.bpmMin) {
+      msg = `Low heart rate detected: ${val} BPM (normal min: ${thresholds.bpmMin} BPM)`;
+      severity = val < 40 ? 'critical' : 'warning';
+    }
   }
+
   if (sensor === 'temperature') {
-    if (val > thresholds.tempMax) msg = `⚠ High temperature: ${val}°C — possible fever!`;
-    if (val < thresholds.tempMin) msg = `⚠ Low temperature: ${val}°C`;
+    if (val > thresholds.tempMax) {
+      msg = `High temperature: ${val}°C — possible fever! (normal max: ${thresholds.tempMax}°C)`;
+      severity = val > 39.5 ? 'critical' : 'warning';
+    }
+    if (val < thresholds.tempMin) {
+      msg = `Low temperature: ${val}°C (normal min: ${thresholds.tempMin}°C)`;
+      severity = 'warning';
+    }
   }
-  const bar = document.getElementById('alert-bar');
+
   if (msg) {
-    document.getElementById('alert-msg').textContent = msg;
+    // 1. Red bar at top
+    const bar = document.getElementById('alert-bar');
+    document.getElementById('alert-msg').textContent = (severity === 'critical' ? '🚨 ' : '⚠ ') + msg;
     bar.style.display = 'flex';
-    if (db) db.ref('/health_monitor/alerts').push({ sensor, value: val, message: msg, timestamp: ts || new Date().toISOString(), resolved: false });
-    setTimeout(() => bar.style.display = 'none', 8000);
+    bar.style.borderColor = severity === 'critical' ? 'rgba(248,81,73,.8)' : 'rgba(227,179,65,.4)';
+    setTimeout(() => bar.style.display = 'none', 10000);
+
+    // 2. Popup notification (top right)
+    showPopup(msg, severity);
+
+    // 3. Sound beep
+    playAlertSound(severity);
+
+    // 4. Browser notification
+    sendBrowserNotification(severity === 'critical' ? '🚨 Critical Health Alert' : '⚠ Health Warning', msg);
+
+    // 5. Add to alert history
+    addAlertHistory(msg, severity, ts || new Date().toISOString());
+
+    // 6. Save to Firebase
+    if (db) db.ref('/health_monitor/alerts').push({
+      sensor, value: val, message: msg,
+      severity, timestamp: ts || new Date().toISOString(), resolved: false
+    });
   }
 }
 
 /* ── LOG TABLE ────────────────────────────── */
-function addLog(ts, bpm, temp, steps, status) {
+/* ── COMBINED READING STATE ───────────────────── */
+const latestReading = { bpm: null, temp: null, steps: null, activity: '—', bpmStatus: '—', tempStatus: '—', time: null };
+const readingHistory = [];
+
+function updateLogTable() {
+  // fallback path (per-sensor listeners): snapshot the latest known values
+  addCombinedRow(latestReading.time, latestReading.bpm, latestReading.temp, latestReading.steps,
+                 latestReading.activity, latestReading.bpmStatus, latestReading.tempStatus);
+}
+
+function addCombinedRow(time, bpm, temp, steps, activity, bpmSt, tempSt) {
+  readingHistory.unshift({
+    time: realTime(time), bpm, temp, steps, activity,
+    bpmStatus:  bpmSt  || (bpm  ? bpmStatus(bpm).label   : '—'),
+    tempStatus: tempSt || (temp ? tempStatus(temp).label : '—')
+  });
+  if (readingHistory.length > 20) readingHistory.pop();
+  renderLog();
+}
+
+function renderLog() {
   const tbody = document.getElementById('log-body');
-  const row = document.createElement('tr');
-  row.innerHTML = `
-    <td>${fmtTime(ts)}</td>
-    <td>${bpm != null ? bpm + ' bpm' : '—'}</td>
-    <td>${temp != null ? temp + ' °C' : '—'}</td>
-    <td>${steps != null ? steps : '—'}</td>
-    <td><span class="card-status ${status === 'normal' || status === '🎉 Goal reached!' ? 'status-normal' : 'status-warning'}" style="margin:0">${status}</span></td>
-  `;
-  if (tbody.firstChild && tbody.firstChild.colSpan) tbody.innerHTML = '';
-  tbody.insertBefore(row, tbody.firstChild);
-  if (tbody.children.length > 20) tbody.removeChild(tbody.lastChild);
+  tbody.innerHTML = '';
+  readingHistory.forEach(r => {
+    let overallStatus = 'Normal', overallClass = 'status-normal';
+    const bpmBad  = r.bpmStatus && r.bpmStatus !== 'Normal' && r.bpmStatus !== '—';
+    const tempBad = r.tempStatus && r.tempStatus !== 'Normal' && r.tempStatus !== '—';
+    if (bpmBad || tempBad) {
+      overallStatus = bpmBad ? r.bpmStatus : r.tempStatus;
+      overallClass  = (r.tempStatus === 'Fever detected' || r.bpmStatus === 'High — seek rest') ? 'status-danger' : 'status-warning';
+    }
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td style="font-size:11px;">${fmtTime(r.time)}</td>
+      <td>${r.bpm != null ? '<span style="color:var(--heart);font-weight:500;">❤ ' + r.bpm + ' bpm</span>' : '<span style="color:var(--muted);">—</span>'}</td>
+      <td>${r.temp != null ? '<span style="color:var(--temp);font-weight:500;">🌡 ' + Number(r.temp).toFixed(1) + ' °C</span>' : '<span style="color:var(--muted);">—</span>'}</td>
+      <td>${r.steps != null ? '<span style="color:var(--steps);font-weight:500;">👟 ' + r.steps + '</span>' : '<span style="color:var(--muted);">—</span>'}</td>
+      <td><span class="card-status ${overallClass}" style="margin:0;">${overallStatus}</span></td>`;
+    tbody.appendChild(row);
+  });
 }
 
 /* ── STATUS HELPERS ───────────────────────── */
@@ -658,10 +934,56 @@ function tempStatus(v) {
   if (v < thresholds.tempMin) return { cls:'status-warning', label:'Below normal' };
   return { cls:'status-normal', label:'Normal' };
 }
+function realTime(ts) {
+  // use the ESP32 time if it is valid, otherwise the moment the reading arrived (browser time, shown as MYT)
+  if (!ts) return Date.now();
+  if (typeof ts === 'number' && ts < 1000000000) return Date.now();
+  return ts;
+}
+
 function fmtTime(ts) {
   if (!ts) return '—';
-  try { return new Date(ts).toLocaleTimeString(); } catch(e) { return ts; }
+  try {
+    // If it's a MYT string from ESP32 like "2026-08-20 10:30:00 MYT" — show as-is
+    if (typeof ts === 'string' && ts.includes('MYT')) return ts;
+    let d;
+    if (typeof ts === 'number' && ts > 1000000000 && ts < 9999999999) {
+      d = new Date(ts * 1000); // unix seconds → ms
+    } else {
+      d = new Date(ts);
+    }
+    return d.toLocaleString('en-MY', {
+      timeZone: 'Asia/Kuala_Lumpur',
+      day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: true
+    });
+  } catch(e) { return String(ts); }
 }
+
+function getMYTNow() {
+  return new Date().toLocaleString('en-MY', {
+    timeZone: 'Asia/Kuala_Lumpur',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+}
+
+/* ── MYT CLOCK ────────────────────────────── */
+function tickClock() {
+  const now = new Date();
+  document.getElementById('myt-clock').textContent = now.toLocaleTimeString('en-MY', { timeZone:'Asia/Kuala_Lumpur', hour12:false });
+  document.getElementById('myt-date').textContent  = now.toLocaleDateString('en-MY', { timeZone:'Asia/Kuala_Lumpur', day:'2-digit', month:'short', year:'numeric' });
+}
+tickClock(); setInterval(tickClock, 1000);
+
+/* ── AUTO-CONNECT ON LOAD ─────────────────── */
+connectFirebase('auto');
 </script>
 </body>
 </html>
